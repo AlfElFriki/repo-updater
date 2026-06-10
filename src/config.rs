@@ -14,10 +14,11 @@ const DEFAULT_EXCLUDED_REPOS: &[&str] = &[
 #[derive(Debug)]
 pub struct Config {
     excluded: HashSet<String>,
+    only: Option<HashSet<String>>,
 }
 
 impl Config {
-    pub fn load(root: &Path, cli_excludes: &[String]) -> Self {
+    pub fn load(root: &Path, cli_excludes: &[String], cli_only: &[String]) -> Self {
         let mut excluded = HashSet::new();
 
         for repo in DEFAULT_EXCLUDED_REPOS {
@@ -34,23 +35,34 @@ impl Config {
             excluded.insert(repo);
         }
 
-        Self { excluded }
+        let only = if cli_only.is_empty() {
+            None
+        } else {
+            Some(
+                cli_only
+                    .iter()
+                    .filter_map(|entry| normalize_ignore_entry(entry))
+                    .collect(),
+            )
+        };
+
+        Self { excluded, only }
     }
 
-    pub fn is_excluded(&self, root: &Path, path: &Path) -> bool {
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+    pub fn should_process(&self, root: &Path, path: &Path) -> bool {
+        if self.is_excluded(root, path) {
             return false;
-        };
-
-        if self.excluded.contains(&normalize_path_string(name)) {
-            return true;
         }
 
-        let Some(relative) = relative_path_string(root, path) else {
-            return false;
-        };
+        if let Some(only) = &self.only {
+            return matches_selector(root, path, only);
+        }
 
-        self.excluded.contains(&relative)
+        true
+    }
+
+    fn is_excluded(&self, root: &Path, path: &Path) -> bool {
+        matches_selector(root, path, &self.excluded)
     }
 }
 
@@ -83,6 +95,22 @@ fn normalize_path_string(value: &str) -> String {
         .trim_start_matches("./")
         .trim_end_matches('/')
         .replace('\\', "/")
+}
+
+fn matches_selector(root: &Path, path: &Path, selectors: &HashSet<String>) -> bool {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+
+    if selectors.contains(&normalize_path_string(name)) {
+        return true;
+    }
+
+    let Some(relative) = relative_path_string(root, path) else {
+        return false;
+    };
+
+    selectors.contains(&relative)
 }
 
 fn relative_path_string(root: &Path, path: &Path) -> Option<String> {

@@ -16,12 +16,28 @@ struct Args {
     #[arg(long)]
     pull: bool,
 
+    /// Allow pull attempts even when the working tree is dirty.
+    ///
+    /// This does not stash, reset, force checkout, merge, or rebase.
+    /// Git is allowed to reject unsafe switches or pulls.
+    #[arg(long)]
+    allow_dirty: bool,
+
     /// Exclude a repository directory. Can be passed multiple times.
     ///
     /// Example:
     ///   repo-sync --exclude repo-a --exclude repo-b
     #[arg(long = "exclude", value_name = "DIR")]
     exclude: Vec<String>,
+
+    /// Only process selected repository directories. Can be passed multiple times.
+    ///
+    /// .updateignore is still respected and has priority.
+    ///
+    /// Example:
+    ///   repo-sync --only repo-a --only repo-b
+    #[arg(long = "only", value_name = "DIR")]
+    only: Vec<String>,
 }
 
 fn main() {
@@ -35,7 +51,7 @@ fn main() {
         }
     };
 
-    let config = Config::load(&root, &args.exclude);
+    let config = Config::load(&root, &args.exclude, &args.only);
     let repos = discover_repos(&root, &config);
 
     if repos.is_empty() {
@@ -43,7 +59,10 @@ fn main() {
         return;
     }
 
-    let options = SyncOptions { pull: args.pull };
+    let options = SyncOptions {
+        pull: args.pull,
+        allow_dirty: args.allow_dirty,
+    };
 
     for repo in repos {
         process_repo(&repo, &options);

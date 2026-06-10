@@ -5,6 +5,7 @@ use crate::git;
 #[derive(Debug, Clone)]
 pub struct SyncOptions {
     pub pull: bool,
+    pub allow_dirty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +72,12 @@ pub fn process_repo(repo: &Path, options: &SyncOptions) {
     }
 
     if options.pull {
-        pull_fast_forwardable_branches(repo, &statuses, current_branch.as_deref());
+        pull_fast_forwardable_branches(
+            repo,
+            &statuses,
+            current_branch.as_deref(),
+            options.allow_dirty,
+        );
     }
 }
 
@@ -170,6 +176,7 @@ fn pull_fast_forwardable_branches(
     repo: &Path,
     statuses: &[BranchStatus],
     original_branch: Option<&str>,
+    allow_dirty: bool,
 ) {
     let Some(original_branch) = original_branch else {
         println!("Skipping pulls: detached HEAD");
@@ -179,15 +186,27 @@ fn pull_fast_forwardable_branches(
     let original_branch = original_branch.to_string();
     let mut active_branch = original_branch.clone();
 
-    match git::working_tree_clean(repo) {
-        Ok(true) => {}
-        Ok(false) => {
-            println!("Skipping pulls: working tree is dirty");
-            return;
+    if !allow_dirty {
+        match git::working_tree_clean(repo) {
+            Ok(true) => {}
+            Ok(false) => {
+                println!("Skipping pulls: working tree is dirty. Use --allow-dirty to let Git attempt safe pulls.");
+                return;
+            }
+            Err(e) => {
+                println!("Skipping pulls: could not inspect working tree: {e}");
+                return;
+            }
         }
-        Err(e) => {
-            println!("Skipping pulls: could not inspect working tree: {e}");
-            return;
+    } else {
+        match git::working_tree_clean(repo) {
+            Ok(true) => {}
+            Ok(false) => {
+                println!("Working tree is dirty; attempting safe pulls because --allow-dirty was provided");
+            }
+            Err(e) => {
+                println!("Warning: could not inspect working tree before dirty pull attempt: {e}");
+            }
         }
     }
 
@@ -206,15 +225,17 @@ fn pull_fast_forwardable_branches(
     for status in statuses.iter().filter(|status| status.can_fast_forward()) {
         let branch = &status.branch;
 
-        match git::working_tree_clean(repo) {
-            Ok(true) => {}
-            Ok(false) => {
-                println!("Stopping pulls before '{branch}': working tree became dirty");
-                break;
-            }
-            Err(e) => {
-                println!("Stopping pulls before '{branch}': could not inspect working tree: {e}");
-                break;
+        if !allow_dirty {
+            match git::working_tree_clean(repo) {
+                Ok(true) => {}
+                Ok(false) => {
+                    println!("Stopping pulls before '{branch}': working tree became dirty");
+                    break;
+                }
+                Err(e) => {
+                    println!("Stopping pulls before '{branch}': could not inspect working tree: {e}");
+                    break;
+                }
             }
         }
 
@@ -224,7 +245,14 @@ fn pull_fast_forwardable_branches(
                     active_branch = branch.clone();
                 }
                 Err(e) => {
-                    println!("Skipping pull on '{branch}': could not switch branch: {e}");
+                    if allow_dirty {
+                        println!(
+                            "Skipping pull on '{branch}': Git refused to switch branch safely: {e}"
+                        );
+                    } else {
+                        println!("Skipping pull on '{branch}': could not switch branch: {e}");
+                    }
+
                     continue;
                 }
             }
@@ -236,36 +264,49 @@ fn pull_fast_forwardable_branches(
                 pulled_count += 1;
             }
             Err(e) => {
-                println!("Pull failed on '{branch}': {e}");
+                if allow_dirty {
+                    println!(
+                        "Pull failed on '{branch}'. Git likely refused because local changes would be overwritten: {e}"
+                    );
+                } else {
+                    println!("Pull failed on '{branch}': {e}");
+                }
             }
         }
     }
 
-    restore_original_branch(repo, &active_branch, &original_branch);
+    restore_original_branch(repo, &active_branch, &original_branch, allow_dirty);
 
     if pulled_count == 0 {
         println!("No branches were pulled");
     }
 }
 
-fn restore_original_branch(repo: &Path, active_branch: &str, original_branch: &str) {
+fn restore_original_branch(
+    repo: &Path,
+    active_branch: &str,
+    original_branch: &str,
+    allow_dirty: bool,
+) {
     if active_branch == original_branch {
         return;
     }
 
-    match git::working_tree_clean(repo) {
-        Ok(true) => {}
-        Ok(false) => {
-            println!(
-                "Could not restore original branch '{original_branch}': working tree is dirty"
-            );
-            return;
-        }
-        Err(e) => {
-            println!(
-                "Could not restore original branch '{original_branch}': could not inspect working tree: {e}"
-            );
-            return;
+    if !allow_dirty {
+        match git::working_tree_clean(repo) {
+            Ok(true) => {}
+            Ok(false) => {
+                println!(
+                    "Could not restore original branch '{original_branch}': working tree is dirty"
+                );
+                return;
+            }
+            Err(e) => {
+                println!(
+                    "Could not restore original branch '{original_branch}': could not inspect working tree: {e}"
+                );
+                return;
+            }
         }
     }
 
@@ -274,7 +315,13 @@ fn restore_original_branch(repo: &Path, active_branch: &str, original_branch: &s
             println!("Restored original branch '{original_branch}'");
         }
         Err(e) => {
-            println!("Failed to restore original branch '{original_branch}': {e}");
+            if allow_dirty {
+                println!(
+                    "Failed to restore original branch '{original_branch}'. Git refused to switch safely: {e}"
+                );
+            } else {
+                println!("Failed to restore original branch '{original_branch}': {e}");
+            }
         }
     }
 }
