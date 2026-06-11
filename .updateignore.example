@@ -1,0 +1,18 @@
+# .updateignore
+#
+# One pattern per line.
+# Blank lines and lines starting with # are ignored.
+#
+# Exact repo name:
+repo-a
+repo-b
+#
+# Prefix/suffix wildcards:
+SBIC_autores*
+*_old
+#
+# Relative paths:
+some-folder/SBIC_autores*
+#
+# Recursive path patterns, useful if recursive discovery is added later:
+**/SBIC_autores*
